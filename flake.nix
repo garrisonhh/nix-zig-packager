@@ -22,7 +22,7 @@
               system = "x86_64-linux";
               isDependency = false;
               zigVersion = "0.11.0";
-              zigBuildFlags = [ ];
+              zigBuildFlags = [];
               extraAttrs = {};
             }
             // config;
@@ -45,10 +45,21 @@
           buildFlags = builtins.concatStringsSep " " params.zigBuildFlags;
 
           # get deps, name, version from zon
-          zon = (import ./parseZon.nix) {
-            inherit (pkgs) lib;
-            input = builtins.readFile "${params.src}/build.zig.zon";
-          };
+          zon =
+            let
+              zonPath = "${params.src}/build.zig.zon";
+            in
+            if builtins.pathExists zonPath then
+              (import ./parseZon.nix) {
+                inherit (pkgs) lib;
+                input = builtins.readFile zonPath;
+              }
+            else
+              {
+                name = "unnamed-zig-source";
+                version = "none";
+                dependencies = {};
+              };
 
           zigCacheDir = "~/.cache/zig";
 
