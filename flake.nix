@@ -18,14 +18,16 @@
           # config params
           params =
             {
+              src = null;
               system = "x86_64-linux";
               isDependency = false;
               zigVersion = "0.11.0";
               zigBuildFlags = [ ];
+              extraAttrs = {};
             }
             // config;
 
-          inherit (params) system isDependency;
+          inherit (params) system isDependency extraAttrs;
 
           # pkgs with zigpkgs
           pkgs = (import nixpkgs) {
@@ -106,7 +108,7 @@
             '';
           };
 
-          packageDerivation = pkgs.stdenvNoCC.mkDerivation {
+          packageDerivation = pkgs.stdenvNoCC.mkDerivation (extraAttrs // {
             inherit (zon) name version;
             inherit (params) src zigBuildFlags;
 
@@ -133,7 +135,7 @@
             installPhase = ''
               cp -r zig-out/ $out
             '';
-          };
+          });
         in
         if isDependency then dependencyDerivation else packageDerivation;
     in
