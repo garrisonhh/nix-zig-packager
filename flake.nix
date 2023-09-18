@@ -59,6 +59,7 @@
             }
             // config;
 
+          # pkgs with zigpkgs
           pkgs = (import nixpkgs) {
             inherit system;
             overlays = [
@@ -66,16 +67,33 @@
             ];
           };
 
-          # read zon file
+          # get deps, name, version from zon
           zon = readZon "${params.src}/build.zig.zon";
+
+          deps = builtins.trace zon.dependencies zon.dependencies;
         in
         mkDerivation {
           inherit (zon) name version;
           inherit (params) src zigBuildFlags;
 
           nativeBuildInputs = [
-            pkgs.zigpkgs.${params.zigVersion}.hook
+            pkgs.zigpkgs.${params.zigVersion}
           ];
+
+          patchPhase = ''
+            # zig needs this to prevent it from trying to write to homeless
+            # shelter
+            export HOME="$NIX_BUILD_TOP"
+          '';
+
+          buildPhase = ''
+            zig build
+          '';
+
+          installPhase = ''
+            mkdir -p $out
+            cp -r zig-out/* $out/
+          '';
         };
     in
     flake-utils.lib.eachDefaultSystem (system: {
