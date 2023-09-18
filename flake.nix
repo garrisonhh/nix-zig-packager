@@ -13,8 +13,20 @@
     , ...
     }:
     let
-      zigPackage = system: config:
+      buildZig11Package = config:
         let
+          # config params
+          params =
+            {
+              system = "x86_64-linux";
+              isDependency = false;
+              zigVersion = "0.11.0";
+              zigBuildFlags = [ ];
+            }
+            // config;
+
+          inherit (params) system isDependency;
+
           # pkgs with zigpkgs
           pkgs = (import nixpkgs) {
             inherit system;
@@ -23,57 +35,118 @@
             ];
           };
 
-          inherit (pkgs.stdenv) mkDerivation;
-
-          # config params
-          params =
-            {
-              zigVersion = "master";
-              zigBuildFlags = [ ];
-            }
-            // config;
-
-          # get deps, name, version from zon
-          zon =
-            let
-              z = (import ./parseZon.nix) {
-                inherit (pkgs) lib;
-                input = builtins.readFile "${params.src}/build.zig.zon";
-              };
-            in
-            pkgs.lib.debug.traceSeq z z;
-        in
-        mkDerivation {
-          inherit (zon) name version;
-          inherit (params) src zigBuildFlags;
-
-          nativeBuildInputs = [
-            pkgs.zigpkgs.${params.zigVersion}
+          nativeBuildInputs = with pkgs; [
+            zigpkgs.${params.zigVersion}
+            tree
           ];
 
-          patchPhase = ''
-            # zig needs this to prevent it from trying to write to homeless
-            # shelter
-            export HOME="$NIX_BUILD_TOP"
-          '';
+          buildFlags = builtins.concatStringsSep " " params.zigBuildFlags;
 
-          buildPhase = ''
-            zig build
-          '';
+          # get deps, name, version from zon
+          zon = (import ./parseZon.nix) {
+            inherit (pkgs) lib;
+            input = builtins.readFile "${params.src}/build.zig.zon";
+          };
 
-          installPhase = ''
-            mkdir -p $out
-            cp -r zig-out/* $out/
-          '';
-        };
+          zigCacheDir = "~/.cache/zig";
+
+          # shell script for caching deps
+          cacheZigInputs =
+            with builtins;
+            let
+              zigInputs =
+                attrValues
+                  (mapAttrs
+                    (name: meta: {
+                      inherit name;
+                      inherit (meta) hash url;
+                      src = buildZig11Package {
+                        inherit system;
+                        isDependency = true;
+                        src = fetchTarball {
+                          inherit (meta) url;
+                        };
+                      };
+                    })
+                    zon.dependencies);
+            in
+            concatStringsSep
+              "\n"
+              (map
+                (meta: ''
+                  ln -s ${meta.src.outPath}/source ${zigCacheDir}/p/${meta.hash}
+                  cp -r ${meta.src.outPath}/cache/* ${zigCacheDir}/
+                '')
+                zigInputs);
+
+          # helps propagate source code and zig cache for dependencies
+          dependencyDerivation = pkgs.stdenvNoCC.mkDerivation {
+            inherit (zon) name version;
+            inherit (params) src zigBuildFlags;
+
+            nativeBuildInputs = with pkgs; [
+              zigpkgs.${params.zigVersion}
+            ];
+
+            dontConfigure = true;
+
+            patchPhase = ''
+              HOME=$NIX_BUILD_TOP
+
+              mkdir -p ${zigCacheDir}/{p,z,tmp}
+              ${cacheZigInputs}
+            '';
+
+            dontBuild = true;
+
+            installPhase = ''
+              mkdir -p $out
+              cp -r ${params.src} $out/source
+              cp -r ${zigCacheDir} $out/cache
+            '';
+          };
+
+          packageDerivation = pkgs.stdenvNoCC.mkDerivation {
+            inherit (zon) name version;
+            inherit (params) src zigBuildFlags;
+
+            nativeBuildInputs = with pkgs; [
+              zigpkgs.${params.zigVersion}
+              tree
+            ];
+
+            dontConfigure = true;
+
+            patchPhase = ''
+              HOME=$NIX_BUILD_TOP
+
+              mkdir -p ${zigCacheDir}/{p,z,tmp}
+              ${cacheZigInputs}
+
+              tree -l ${zigCacheDir}
+            '';
+
+            buildPhase = ''
+              zig build ${buildFlags} --global-cache-dir ${zigCacheDir}
+            '';
+
+            installPhase = ''
+              cp -r zig-out/ $out
+            '';
+          };
+        in
+        if isDependency then dependencyDerivation else packageDerivation;
     in
-    flake-utils.lib.eachDefaultSystem (system: {
-      packages.default = zigPackage system {
-        src = ./hello;
+    {
+      templates.default = {
+        path = ./template;
+        description = "a basic zig packager template";
       };
 
-      templates.default = ./template;
-      lib.zigPackage = zigPackage system;
+      overlays.default = final: prev: {
+        inherit buildZig11Package;
+      };
+    } // flake-utils.lib.eachDefaultSystem (system: {
       formatter = nixpkgs.legacyPackages.${system}.nixpkgs-fmt;
     });
 }
